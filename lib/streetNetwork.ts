@@ -210,7 +210,14 @@ async function geocodeIntersection(a: string, b: string, near?: { lat: number; l
   const nb = clean(b);
   if (!na || !nb) return null;
   // Whole street names only ("1 AVE" must not match "91 AVE"), optionally with a direction prefix ("W 42 ST").
-  const variants = (n: string) => [...new Set([n, ...(ALIASES[n] ?? [])])].flatMap((m) => [m, `E ${m}`, `W ${m}`, `N ${m}`, `S ${m}`]);
+  // "Dekalb" with no Street/Ave: try the common street types too.
+  const TYPES = new Set(Object.values(TYPE_ABBR).concat(["BROADWAY", "BOWERY", "CONC", "EXPY", "HWY", "SQ", "LOOP", "WAY", "WALK", "ROW", "SLIP", "OVAL", "CIR"]));
+  const withTypes = (n: string) => {
+    const last = n.split(" ").pop()!;
+    return TYPES.has(last) || ALIASES[n] ? [n] : [n, ...["AVE", "ST", "BLVD", "PL", "RD", "PKWY", "DR"].map((t) => `${n} ${t}`)];
+  };
+  const variants = (n: string) =>
+    [...new Set([n, ...(ALIASES[n] ?? [])].flatMap(withTypes))].flatMap((m) => [m, `E ${m}`, `W ${m}`, `N ${m}`, `S ${m}`]);
   const q = (n: string) =>
     // stname_label is single-spaced ("E 59 ST"); full_street_name has a double space after the direction.
     `upper(stname_label) in (${variants(n).map((v) => `'${v.replace(/'/g, "''")}'`).join(",")})${boro ? ` AND boroughcode='${boro}'` : ""}`;
@@ -219,7 +226,7 @@ async function geocodeIntersection(a: string, b: string, near?: { lat: number; l
   // For numbered streets the prefix is just Manhattan/Bronx style ("W 42 ST"), so it still counts as exact.
   const score = (name: string, n: string) => {
     const nn = normName(name);
-    return nn === n || ALIASES[n]?.includes(nn) || /^\d/.test(n) ? 2 : 1;
+    return nn === n || nn.startsWith(`${n} `) || ALIASES[n]?.includes(nn) || /^\d/.test(n) ? 2 : 1;
   };
   const ends = (rows: CenterlineRow[], n: string) => {
     const m = new Map<string, { p: LonLat; boro?: string; name: string; score: number }>();
