@@ -52,7 +52,7 @@ export const GlassBoxPanel = forwardRef<HTMLElement, GlassBoxPanelProps>(
           {steps.map((s) => (
             <li key={s.id} style={styles.step}>
               <div style={styles.stepHead}>
-                <span style={styles.agent}>{AGENT_LABELS[s.tool]}</span>
+                <span style={styles.agent}>{s.agentLabel ?? AGENT_LABELS[s.tool]}</span>
                 <span style={styles.status} data-status={s.status}>
                   {STATUS_LABEL[s.status]}
                   {s.durationMs !== undefined ? ` · ${s.durationMs} ms` : ""}

@@ -26,7 +26,7 @@ const line = (blocks: BlockContext[]): GeoJSON.FeatureCollection => ({
   features: blocks.map((b) => ({
     type: "Feature",
     properties: { blockId: b.blockId },
-    geometry: { type: "LineString", coordinates: [[b.from.lon, b.from.lat], [b.to.lon, b.to.lat]] },
+    geometry: { type: "LineString", coordinates: b.path ?? [[b.from.lon, b.from.lat], [b.to.lon, b.to.lat]] },
   })),
 });
 

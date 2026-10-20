@@ -32,9 +32,19 @@ export interface BlockContext {
   /** Adjacent block IDs so narration/data can pre-fetch. */
   nextBlockId: string | null;
   prevBlockId: string | null;
-  /** Position in the planned route (0-based) and route length. */
+  /** Position in the planned route (0-based; -1 once you've wandered off it) and route length. */
   routeIndex: number;
   routeLength: number;
+  /** Full block geometry [lon, lat][] when the street curves; otherwise from → to. */
+  path?: [number, number][];
+}
+
+/** What the page drives: the demo corridor walker and the citywide network walker both fit. */
+export interface Walker {
+  plan: { label: string; blocks: BlockContext[] };
+  current(): BlockContext;
+  peek(direction?: "next_block" | "prev_block"): BlockContext | null;
+  move(direction: WalkDirection, crossStreet?: string): { ok: true; block: BlockContext } | { ok: false; reason: string };
 }
 
 interface Corridor {
@@ -48,7 +58,7 @@ interface Corridor {
 const KNICKERBOCKER: Corridor = {
   street: "Knickerbocker Avenue",
   borough: "Brooklyn",
-  councilDistrict: 34,
+  councilDistrict: 0, // looked up live per block (see lib/blockData.ts)
   communityBoard: "Brooklyn CB 4",
   // Ordered northwest → southeast
   corners: [
@@ -94,7 +104,7 @@ const KNICKERBOCKER: Corridor = {
 const MYRTLE: Corridor = {
   street: "Myrtle Avenue",
   borough: "Brooklyn",
-  councilDistrict: 34,
+  councilDistrict: 0,
   communityBoard: "Brooklyn CB 4",
   // Ordered west → east
   corners: [
@@ -251,7 +261,7 @@ export function planWalk(origin = "", destination = ""): WalkPlan {
  * Stateful walker. Person D's voice router and Person F's arrow keys both call `move()`.
  * Moving past the planned route keeps walking the same street (free walk).
  */
-export class StreetWalker {
+export class StreetWalker implements Walker {
   private leg: Leg;
   private index = 0;
   private length: number;

@@ -34,3 +34,24 @@ button { cursor: pointer; }
 button.primary { background: var(--accent); color: #062b1d; border-color: var(--accent); font-weight: 700; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 input { flex: 1; min-width: 0; }
+
+.datacard { position: absolute; top: 16px; right: 16px; width: min(340px, calc(100% - 32px)); max-height: calc(100% - 220px); overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.datacard h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 4px 0 8px; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+.stats div { background: #1f252d; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.stats b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+.stats span { font-size: 12px; color: var(--muted); }
+.muted { color: var(--muted); font-size: 14px; }
+.small { font-size: 12px; }
+.lag { color: var(--warn); font-size: 13px; border-left: 3px solid var(--warn); padding-left: 8px; }
+.datacard a { color: var(--accent); }
+@media (max-width: 700px) { .datacard { top: auto; bottom: 200px; max-height: 35vh; } }
+.route { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; margin-top: 10px; }
+.route input { min-height: 40px; padding: 8px 12px; font-size: 14px; }
+.route button { min-height: 40px; padding: 8px 14px; }
+@media (max-width: 700px) { .route { grid-template-columns: 1fr; } }
+.datacard .tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+.datacard .tabs button { flex: 1; min-height: 34px; padding: 6px 8px; font-size: 13px; border-radius: 8px; }
+.datacard .tabs button[aria-selected="true"] { background: var(--accent); color: #062b1d; border-color: var(--accent); font-weight: 700; }
+.datacard { width: min(380px, calc(100% - 32px)); }
+button.wide { width: 100%; margin-top: 10px; border-radius: 10px; }
