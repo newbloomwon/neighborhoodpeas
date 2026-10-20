@@ -41,7 +41,7 @@ export interface BBox {
 
 const SUFFIX: Record<string, string> = {
   AVE: "Avenue", AV: "Avenue", ST: "Street", PL: "Place", BLVD: "Boulevard", RD: "Road", DR: "Drive", PKWY: "Parkway",
-  LN: "Lane", CT: "Court", TER: "Terrace", SQ: "Square", HWY: "Highway", EXPWY: "Expressway", BR: "Bridge", PLZ: "Plaza",
+  LN: "Lane", CT: "Court", TER: "Terrace", SQ: "Square", HWY: "Highway", EXPWY: "Expressway", BR: "Bridge", PLZ: "Plaza", CONC: "Concourse",
   E: "East", W: "West", N: "North", S: "South", BWAY: "Broadway", ST_: "Saint",
 };
 function ordinal(n: string) {
@@ -71,6 +71,15 @@ const normName = (s: string) =>
     .replace(/\bROAD\b/g, "RD")
     .replace(/\bDRIVE\b/g, "DR")
     .replace(/\bPARKWAY\b/g, "PKWY")
+    .replace(/\bCONCOURSE\b/g, "CONC")
+    .replace(/\bEXPRESSWAY\b/g, "EXPWY")
+    .replace(/\bTERRACE\b/g, "TER")
+    .replace(/\bLANE\b/g, "LN")
+    .replace(/\bCOURT\b/g, "CT")
+    .replace(/\bPLAZA\b/g, "PLZ")
+    .replace(/\bSAINT\b/g, "ST")
+    .replace(/\bNORTH\b/g, "N")
+    .replace(/\bSOUTH\b/g, "S")
     .replace(/\bEAST\b/g, "E")
     .replace(/\bWEST\b/g, "W")
     .replace(/(\d+)(ST|ND|RD|TH)\b/g, "$1")
@@ -183,30 +192,66 @@ const BORO_WORDS: [RegExp, string][] = [
 
 /** "Knickerbocker Ave and Myrtle Ave" → the shared corner, straight from the city's centerline. */
 async function geocodeIntersection(a: string, b: string, near?: { lat: number; lon: number }): Promise<Place | null> {
-  const boro = BORO_WORDS.find(([re]) => re.test(`${a} ${b}`))?.[1];
-  const clean = (s: string) => normName(s.replace(/\b(manhattan|bronx|brooklyn|queens|staten island|ny|nyc|new york)\b/gi, ""));
+  // A borough only counts at the end ("…, Queens"), so "Queens Blvd" stays a street name.
+  const TRAIL = /(?:,|\s)+(?:in\s+)?(manhattan|the bronx|bronx|brooklyn|queens|staten island|ny|nyc|new york)\s*(?:,?\s*(?:ny|nyc|new york))?\s*$/i;
+  const boroWord = (b.match(TRAIL) ?? a.match(TRAIL))?.[1] ?? "";
+  const boro = BORO_WORDS.find(([re]) => re.test(boroWord))?.[1];
+  const clean = (s: string) => normName(s.replace(TRAIL, ""));
   const na = clean(a);
   const nb = clean(b);
   if (!na || !nb) return null;
-  const q = (n: string) => `upper(full_street_name) like '%${n.replace(/'/g, "''")}%'${boro ? ` AND boroughcode='${boro}'` : ""}`;
-  const [ra, rb] = await Promise.all([fetchCenterline(q(na), 3000), fetchCenterline(q(nb), 3000)]);
-  const ends = (rows: CenterlineRow[]) => {
-    const m = new Map<string, { p: LonLat; boro?: string; name: string }>();
+  // Whole street names only ("1 AVE" must not match "91 AVE"), optionally with a direction prefix ("W 42 ST").
+  const variants = (n: string) => [n, `E ${n}`, `W ${n}`, `N ${n}`, `S ${n}`];
+  const q = (n: string) =>
+    // stname_label is single-spaced ("E 59 ST"); full_street_name has a double space after the direction.
+    `upper(stname_label) in (${variants(n).map((v) => `'${v.replace(/'/g, "''")}'`).join(",")})${boro ? ` AND boroughcode='${boro}'` : ""}`;
+  const [ra, rb] = await Promise.all([fetchCenterline(q(na), 5000), fetchCenterline(q(nb), 5000)]);
+  // Exact name beats a direction-prefixed one, so "Broadway" isn't read as "East Broadway".
+  // For numbered streets the prefix is just Manhattan/Bronx style ("W 42 ST"), so it still counts as exact.
+  const score = (name: string, n: string) => (normName(name) === n || /^\d/.test(n) ? 2 : 1);
+  const ends = (rows: CenterlineRow[], n: string) => {
+    const m = new Map<string, { p: LonLat; boro?: string; name: string; score: number }>();
     for (const r of rows) {
       const c = rowCoords(r);
+      const name = r.stname_label ?? r.full_street_name ?? "";
       if (!c) continue;
-      for (const p of [c[0], c[c.length - 1]]) m.set(keyOf(p, ""), { p, boro: r.boroughcode, name: r.stname_label || r.full_street_name || "" });
+      for (const p of [c[0], c[c.length - 1]]) {
+        const k = keyOf(p, "");
+        const prev = m.get(k);
+        const sc = score(name, n);
+        if (!prev || sc > prev.score) m.set(k, { p, boro: r.boroughcode, name, score: sc });
+      }
     }
     return m;
   };
-  const ea = ends(ra);
-  const eb = ends(rb);
-  const shared = [...ea.entries()].filter(([k]) => eb.has(k)).map(([, v]) => v);
+  const ea = ends(ra, na);
+  const eb = ends(rb, nb);
+  let shared = [...ea.entries()].filter(([k]) => eb.has(k)).map(([k, v]) => ({ ...v, other: eb.get(k)!, total: v.score + eb.get(k)!.score }));
+  if (!shared.length) {
+    // Divided roads (Queens Blvd) don't share an exact node with cross streets: take ends within 40 m.
+    const bs = [...eb.values()];
+    shared = [...ea.values()].flatMap((v) => {
+      let best: (typeof bs)[number] | null = null;
+      let d = 40;
+      for (const o of bs) {
+        const m = meters(v.p, o.p);
+        if (m < d) [best, d] = [o, m];
+      }
+      return best ? [{ ...v, other: best, total: v.score + best.score }] : [];
+    });
+  }
   if (!shared.length) return null;
-  if (near) shared.sort((x, y) => meters(x.p, [near.lon, near.lat]) - meters(y.p, [near.lon, near.lat]));
+  // Same corner in several boroughs (42nd St & 8th Ave is in Manhattan and Brooklyn): closest to the
+  // other end of the walk if we know it, else Manhattan first, unless a borough was named.
+  const boroRank = (b?: string) => ["1", "3", "4", "2", "5"].indexOf(b ?? "");
+  shared.sort(
+    (x, y) =>
+      y.total - x.total ||
+      (near ? meters(x.p, [near.lon, near.lat]) - meters(y.p, [near.lon, near.lat]) : boroRank(x.boro) - boroRank(y.boro)),
+  );
   const s = shared[0];
   return {
-    label: `${prettyStreet(s.name)} & ${prettyStreet(eb.get(keyOf(s.p, ""))!.name)}`,
+    label: `${prettyStreet(s.name)} & ${prettyStreet(s.other.name)}`,
     lat: s.p[1],
     lon: s.p[0],
     borough: BOROUGHS[s.boro ?? ""],
@@ -239,7 +284,8 @@ export async function geocode(text: string, near?: { lat: number; lon: number })
   const t = text.trim();
   if (!t) return null;
   const corner = t.match(/^(.+?)\s+(?:and|&|at|@|y|con|\/)\s+(.+)$/i);
-  if (corner && !/^\d/.test(t)) {
+  // "350 5th Ave" / "35-20 Broadway" start with a house number; "42nd St and 8th Ave" is a corner.
+  if (corner && !/^\d+(-\d+)?\s/.test(t)) {
     const hit = await geocodeIntersection(corner[1], corner[2], near).catch(() => null);
     if (hit) return hit;
   }
