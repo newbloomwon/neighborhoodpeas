@@ -61,31 +61,26 @@ export function prettyStreet(raw: string): string {
     })
     .join(" ");
 }
-const normName = (s: string) =>
-  s
+// Street types are only abbreviated as the last word ("Court Street" → "COURT ST", not "CT ST"),
+// directions only as the first word ("West 42nd St" → "W 42 ST", but "South Street" stays).
+const TYPE_ABBR: Record<string, string> = {
+  AVENUE: "AVE", AV: "AVE", STREET: "ST", PLACE: "PL", BOULEVARD: "BLVD", ROAD: "RD", DRIVE: "DR", PARKWAY: "PKWY",
+  CONCOURSE: "CONC", EXPRESSWAY: "EXPWY", TERRACE: "TER", LANE: "LN", COURT: "CT", PLAZA: "PLZ",
+};
+const DIR_ABBR: Record<string, string> = { NORTH: "N", SOUTH: "S", EAST: "E", WEST: "W" };
+const normName = (s: string) => {
+  const words = s
     .toUpperCase()
-    .replace(/\bAVENUE\b/g, "AVE")
-    .replace(/\bSTREET\b/g, "ST")
-    .replace(/\bPLACE\b/g, "PL")
-    .replace(/\bBOULEVARD\b/g, "BLVD")
-    .replace(/\bROAD\b/g, "RD")
-    .replace(/\bDRIVE\b/g, "DR")
-    .replace(/\bPARKWAY\b/g, "PKWY")
-    .replace(/\bCONCOURSE\b/g, "CONC")
-    .replace(/\bEXPRESSWAY\b/g, "EXPWY")
-    .replace(/\bTERRACE\b/g, "TER")
-    .replace(/\bLANE\b/g, "LN")
-    .replace(/\bCOURT\b/g, "CT")
-    .replace(/\bPLAZA\b/g, "PLZ")
-    .replace(/\bSAINT\b/g, "ST")
-    .replace(/\bNORTH\b/g, "N")
-    .replace(/\bSOUTH\b/g, "S")
-    .replace(/\bEAST\b/g, "E")
-    .replace(/\bWEST\b/g, "W")
-    .replace(/(\d+)(ST|ND|RD|TH)\b/g, "$1")
     .replace(/[^A-Z0-9 ]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/\b(\d+)(ST|ND|RD|TH)\b/g, "$1")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.length) return "";
+  const last = words.length - 1;
+  if (last > 0 && TYPE_ABBR[words[last]]) words[last] = TYPE_ABBR[words[last]];
+  if (words.length > 2 && DIR_ABBR[words[0]]) words[0] = DIR_ABBR[words[0]];
+  return words.map((w, i) => (w === "SAINT" && i < last ? "ST" : w)).join(" ");
+};
 
 // ---------- geometry ----------
 
@@ -191,6 +186,20 @@ const BORO_WORDS: [RegExp, string][] = [
 ];
 
 /** "Knickerbocker Ave and Myrtle Ave" → the shared corner, straight from the city's centerline. */
+// Manhattan avenues the city stores under their official names.
+const ALIAS_PAIRS: [string, string][] = [
+  ["6 AVE", "AVE OF THE AMERICAS"],
+  ["AVENUE OF THE AMERICAS", "AVE OF THE AMERICAS"],
+  ["7 AVE", "ADAM CLAYTON POWELL JR BLVD"],
+  ["8 AVE", "FREDERICK DOUGLASS BLVD"],
+  ["MALCOLM X BLVD", "LENOX AVE"],
+];
+const ALIASES: Record<string, string[]> = {};
+for (const [x, y] of ALIAS_PAIRS) {
+  (ALIASES[x] ??= []).push(y);
+  (ALIASES[y] ??= []).push(x);
+}
+
 async function geocodeIntersection(a: string, b: string, near?: { lat: number; lon: number }): Promise<Place | null> {
   // A borough only counts at the end ("…, Queens"), so "Queens Blvd" stays a street name.
   const TRAIL = /(?:,|\s)+(?:in\s+)?(manhattan|the bronx|bronx|brooklyn|queens|staten island|ny|nyc|new york)\s*(?:,?\s*(?:ny|nyc|new york))?\s*$/i;
@@ -201,14 +210,17 @@ async function geocodeIntersection(a: string, b: string, near?: { lat: number; l
   const nb = clean(b);
   if (!na || !nb) return null;
   // Whole street names only ("1 AVE" must not match "91 AVE"), optionally with a direction prefix ("W 42 ST").
-  const variants = (n: string) => [n, `E ${n}`, `W ${n}`, `N ${n}`, `S ${n}`];
+  const variants = (n: string) => [...new Set([n, ...(ALIASES[n] ?? [])])].flatMap((m) => [m, `E ${m}`, `W ${m}`, `N ${m}`, `S ${m}`]);
   const q = (n: string) =>
     // stname_label is single-spaced ("E 59 ST"); full_street_name has a double space after the direction.
     `upper(stname_label) in (${variants(n).map((v) => `'${v.replace(/'/g, "''")}'`).join(",")})${boro ? ` AND boroughcode='${boro}'` : ""}`;
   const [ra, rb] = await Promise.all([fetchCenterline(q(na), 5000), fetchCenterline(q(nb), 5000)]);
   // Exact name beats a direction-prefixed one, so "Broadway" isn't read as "East Broadway".
   // For numbered streets the prefix is just Manhattan/Bronx style ("W 42 ST"), so it still counts as exact.
-  const score = (name: string, n: string) => (normName(name) === n || /^\d/.test(n) ? 2 : 1);
+  const score = (name: string, n: string) => {
+    const nn = normName(name);
+    return nn === n || ALIASES[n]?.includes(nn) || /^\d/.test(n) ? 2 : 1;
+  };
   const ends = (rows: CenterlineRow[], n: string) => {
     const m = new Map<string, { p: LonLat; boro?: string; name: string; score: number }>();
     for (const r of rows) {
@@ -281,7 +293,8 @@ async function nominatim(text: string): Promise<Place | null> {
 }
 
 export async function geocode(text: string, near?: { lat: number; lon: number }): Promise<Place | null> {
-  const t = text.trim();
+  // People type "to 43rd St and 8th Ave" in the To box; drop the leading from/to (and Spanish desde/hasta/a).
+  const t = text.trim().replace(/^(?:from|to|desde|hasta|a|de)\s+(?:the\s+|la\s+|el\s+)?/i, "").trim();
   if (!t) return null;
   const corner = t.match(/^(.+?)\s+(?:and|&|at|@|y|con|\/)\s+(.+)$/i);
   // "350 5th Ave" / "35-20 Broadway" start with a house number; "42nd St and 8th Ave" is a corner.
