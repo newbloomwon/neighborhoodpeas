@@ -5,11 +5,13 @@ npm install
 npm run dev   # http://localhost:3000
 ```
 
-Press **Up** (or Start) to drop to street level on Knickerbocker Ave and walk toward Myrtle. **Up/Down** = next/back block, **Left/Right** = turn at the next corner. The text box takes `next block`, `go back`, `turn left on Myrtle`, `walk me from Stockholm to Menahan`.
+Type a **From** and **To** (an address, a place like "Grand Central Terminal", or a corner like "Myrtle Ave and Wyckoff Ave") and press **Walk**, or press **Up**/Start for the Knickerbocker Ave demo route. **Up/Down** = next/back block, **Left/Right** = turn at the next corner. The text box takes `next block`, `go back`, `turn left on Myrtle`, `walk me from Stockholm to Menahan`.
 
 ## Files (per PRD)
 - `components/Map3DCanvas.tsx` — MapLibre + OpenFreeMap 3D buildings (all 5 boroughs, no API key); highlights the route, the active block (green) and the upcoming intersection (amber).
 - `lib/cameraChoreographer.ts` — `dropToStreet`, `glideTo`, `turnOnto`, `backToCity`; honors reduced motion.
+- `lib/streetNetwork.ts` — walk anywhere in NYC: looks up places (NYC GeoSearch, then OpenStreetMap Nominatim; corners from the city centerline), builds a walking graph from NYC's official street centerline (`inkn-q76z`, already split at every intersection), and routes block by block. `planRoute(from, to)` returns a `Walker`.
+- `lib/blockData.ts` — live 311 noise/complaint and NYPD crash numbers for each block, computed from NYC Open Data rows.
 - `lib/streetGraph.ts` — `planWalk(origin, destination)` and `StreetWalker.move(direction)`. Corners are real OSM intersections (Knickerbocker Ave, Myrtle Ave in Bushwick).
 
 ## Hand-off contract (for B, C, D, E, F)

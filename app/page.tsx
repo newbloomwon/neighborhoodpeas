@@ -5,7 +5,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type { Map as MapLibreMap } from "maplibre-gl";
-import { planWalk, StreetWalker, type BlockContext, type WalkDirection } from "@/lib/streetGraph";
+import { planWalk, StreetWalker, type BlockContext, type WalkDirection, type Walker } from "@/lib/streetGraph";
+import { planRoute } from "@/lib/streetNetwork";
 import { dropToStreet, glideTo, turnOnto, prefersReducedMotion } from "@/lib/cameraChoreographer";
 import { fetchBlockData, narrate, type BlockData } from "@/lib/blockData";
 
@@ -14,7 +15,7 @@ const Map3DCanvas = dynamic(() => import("@/components/Map3DCanvas"), { ssr: fal
 /** Minimal walk-intent parser until Person D's voice router lands. */
 function parseWalkIntent(text: string): { direction: WalkDirection; crossStreet?: string } | { start: { origin: string; destination: string } } | null {
   const t = text.toLowerCase().trim();
-  const walk = t.match(/(?:walk|start|ll[eé]vame|camina)(?: me)?(?: (?:from|on|desde|en))? (.+?)(?: (?:to|hasta|a) (.+))?$/);
+  const walk = text.trim().match(/^(?:walk|start|ll[eé]vame|camina)(?: me)?(?: (?:from|on|desde|en))? (.+?)(?: (?:to|hasta|a) (.+))?$/i);
   if (/^(next|forward|siguiente|adelante)|next block|siguiente cuadra/.test(t)) return { direction: "next_block" };
   if (/^(back|go back|previous|atr[aá]s)|back one block|cuadra anterior/.test(t)) return { direction: "prev_block" };
   const turn = t.match(/(?:turn|gira|dobla) (left|right|a la izquierda|a la derecha)(?: (?:on|onto|en) (.+))?/);
@@ -26,9 +27,12 @@ function parseWalkIntent(text: string): { direction: WalkDirection; crossStreet?
 export default function WalkPage() {
   const [plan, setPlan] = useState(() => planWalk());
   const [block, setBlock] = useState<BlockContext | null>(null);
-  const [caption, setCaption] = useState("Press Start or the Up arrow to walk Knickerbocker Avenue across Myrtle.");
+  const [caption, setCaption] = useState("Type where you are and where you want to go, or press Start for a demo walk down Knickerbocker Avenue.");
   const [input, setInput] = useState("");
-  const walker = useRef<StreetWalker | null>(null);
+  const walker = useRef<Walker | null>(null);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [loading, setLoading] = useState(false);
   const map = useRef<MapLibreMap | null>(null);
   const busy = useRef(false);
   const [data, setData] = useState<BlockData | null>(null);
@@ -56,11 +60,25 @@ export default function WalkPage() {
 
   const start = useCallback(
     async (origin = "", destination = "") => {
-      if (!map.current) return;
-      const p = planWalk(origin, destination);
-      setPlan(p);
-      walker.current = new StreetWalker(p);
-      const b = walker.current.current();
+      if (!map.current || busy.current) return;
+      let w: Walker;
+      if (!origin.trim() && !destination.trim()) {
+        w = new StreetWalker(planWalk());
+      } else {
+        setLoading(true);
+        setCaption(`Finding a walking route${destination ? ` from ${origin} to ${destination}` : ` from ${origin}`}…`);
+        try {
+          w = (await planRoute(origin, destination)).walker;
+        } catch (err) {
+          setCaption(err instanceof Error ? err.message : "I couldn't plan that walk.");
+          return;
+        } finally {
+          setLoading(false);
+        }
+      }
+      walker.current = w;
+      setPlan(w.plan);
+      const b = w.current();
       announce(b);
       busy.current = true;
       await dropToStreet(map.current, b, { reducedMotion: prefersReducedMotion() });
@@ -116,7 +134,11 @@ export default function WalkPage() {
     const intent = parseWalkIntent(input);
     setInput("");
     if (!intent) return setCaption(`Try "next block", "go back", "turn left on Myrtle", or "walk me from Stockholm to Menahan".`);
-    if ("start" in intent) start(intent.start.origin, intent.start.destination);
+    if ("start" in intent) {
+      setFrom(intent.start.origin);
+      setTo(intent.start.destination);
+      start(intent.start.origin, intent.start.destination);
+    }
     else move(intent.direction, intent.crossStreet);
   };
 
@@ -127,14 +149,27 @@ export default function WalkPage() {
       <Map3DCanvas route={plan.blocks} activeBlock={block} onReady={(m) => (map.current = m)} />
 
       <section className="hud" aria-label="Walk position">
-        <p className="kicker">{block ? `Block ${Math.min(idx + 1, plan.blocks.length)} of ${plan.blocks.length}` : "Walk Mode"}</p>
-        <h1>{block?.streetName ?? "Knickerbocker Avenue"}</h1>
+        <p className="kicker">{block ? (idx < 0 ? "Off route · exploring" : `Block ${Math.min(idx + 1, plan.blocks.length)} of ${plan.blocks.length}`) : "Walk Mode"}</p>
+        <h1>{block?.streetName ?? "Walk any NYC block"}</h1>
         <p className="between">{block ? `${block.fromCrossStreet} → ${block.toCrossStreet}` : plan.label}</p>
         <ol className="progress" aria-hidden="true">
           {plan.blocks.map((b, i) => (
             <li key={b.blockId} className={i === idx ? "here" : i < idx ? "done" : ""} />
           ))}
         </ol>
+        <form
+          className="route"
+          onSubmit={(e) => {
+            e.preventDefault();
+            start(from, to);
+          }}
+        >
+          <label htmlFor="from" className="sr-only">From</label>
+          <input id="from" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="From: address, place, or corner" autoComplete="off" />
+          <label htmlFor="to" className="sr-only">To</label>
+          <input id="to" value={to} onChange={(e) => setTo(e.target.value)} placeholder='To: e.g. "Myrtle Ave and Wyckoff Ave"' autoComplete="off" />
+          <button type="submit" className="primary" disabled={loading || !from.trim()}>{loading ? "Finding…" : "Walk"}</button>
+        </form>
       </section>
 
 
@@ -181,7 +216,7 @@ export default function WalkPage() {
           <button className={block ? "primary" : ""} onClick={() => move("next_block")} aria-keyshortcuts="ArrowUp">Next block ▶</button>
           <form onSubmit={submit}>
             <label htmlFor="cmd" className="sr-only">Walk command</label>
-            <input id="cmd" value={input} onChange={(e) => setInput(e.target.value)} placeholder='"turn left on Myrtle"' autoComplete="off" />
+            <input id="cmd" value={input} onChange={(e) => setInput(e.target.value)} placeholder='"turn left", "next block"' autoComplete="off" />
             <button type="submit">Go</button>
           </form>
         </div>
