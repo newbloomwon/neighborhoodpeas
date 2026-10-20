@@ -41,10 +41,12 @@ export function answerSpokenBlockQuestion({
   blockId = "bk-knickerbocker-01",
   language = null,
   candidateLLMResponse = null,
+  // Optional: pass live block data (same shape as a fixture) instead of looking up a fixture by id.
+  blockFixture: liveBlock = null,
 }) {
   const startMs = performance.now();
   const resolvedLang = detectLanguage(question, language);
-  const blockFixture = getBlockFixtureById(blockId);
+  const blockFixture = liveBlock ?? getBlockFixtureById(blockId);
   const s311 = blockFixture.summary311;
   const crash = blockFixture.intersectionCrashes;
 

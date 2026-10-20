@@ -9,6 +9,10 @@ export interface BlockData {
   noise: Query311AccountabilityResult; // 311 noise complaints, last 30 days
   all311: Query311AccountabilityResult; // all 311 complaints, last 30 days
   crashes: QueryIntersectionCrashesResult; // upcoming intersection, last 12 months of available data
+  /** City Council district containing the block's midpoint (NYC Open Data 872g-cjhh), or null if unknown. */
+  councilDistrict: number | null;
+  /** Wall-clock timings for the Glass Box. */
+  timings: { startedAt: number; s311Ms: number; crashMs: number };
 }
 
 const iso = (d: Date) => d.toISOString().slice(0, 19);
@@ -82,9 +86,12 @@ async function load(block: BlockContext): Promise<BlockData> {
   const dLon = 35 / (111320 * Math.cos((c.lat * Math.PI) / 180));
   const cornerBox = { north: c.lat + d, south: c.lat - d, east: c.lon + dLon, west: c.lon - dLon };
 
-  const [all, latest] = await Promise.all([
-    soda<Row311>("erm2-nwe9", { $select: select, $where: where, $limit: "5000" }),
+  const startedAt = Date.now();
+  const mid = { lat: (block.from.lat + block.to.lat) / 2, lon: (block.from.lon + block.to.lon) / 2 };
+  const [all, latest, council] = await Promise.all([
+    soda<Row311>("erm2-nwe9", { $select: select, $where: where, $limit: "5000" }).then((r) => ({ ...r, ms: Date.now() - startedAt })),
     soda<{ m: string }>("h9gi-nx95", { $select: "max(crash_date) as m" }),
+    soda<{ coundist: string }>("872g-cjhh", { $select: "coundist", $where: `intersects(the_geom, 'POINT(${mid.lon.toFixed(6)} ${mid.lat.toFixed(6)})')` }).catch(() => null),
   ]);
   const through = latest.rows[0]?.m?.slice(0, 10) ?? "";
   const crashSince = new Date(Date.parse(through || new Date().toISOString()) - 365 * 864e5);
@@ -93,7 +100,9 @@ async function load(block: BlockContext): Promise<BlockData> {
       "count(*) as n, sum(number_of_pedestrians_injured) as ped, sum(number_of_cyclist_injured) as cyc, sum(number_of_motorist_injured) as mot, sum(number_of_persons_killed) as killed",
     $where: `${box(cornerBox)} AND crash_date > '${iso(crashSince)}'`,
   });
+  const crashMs = Date.now() - startedAt;
   const cr = crashes.rows[0] ?? {};
+  const district = Number(council?.rows[0]?.coundist);
   const num = (v?: string) => Number(v ?? 0) || 0;
 
   const noiseRows = all.rows.filter((r) => /noise/i.test(r.complaint_type));
@@ -111,6 +120,8 @@ async function load(block: BlockContext): Promise<BlockData> {
       sourceDatasetId: "h9gi-nx95",
       executedQuery: crashes.url,
     },
+    councilDistrict: Number.isInteger(district) && district > 0 ? district : null,
+    timings: { startedAt, s311Ms: all.ms, crashMs },
   };
 }
 

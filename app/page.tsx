@@ -8,7 +8,11 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 import { planWalk, StreetWalker, type BlockContext, type WalkDirection, type Walker } from "@/lib/streetGraph";
 import { planRoute } from "@/lib/streetNetwork";
 import { dropToStreet, glideTo, turnOnto, prefersReducedMotion } from "@/lib/cameraChoreographer";
-import { fetchBlockData, narrate, type BlockData } from "@/lib/blockData";
+import { fetchBlockData, type BlockData } from "@/lib/blockData";
+import { askAboutBlock, blockSteps, narrateBlock } from "@/lib/agentBridge";
+import type { GlassBoxStep } from "@/lib/glassBox";
+import { GlassBoxPanel } from "@/components/GlassBoxPanel";
+import { AccountabilityCard } from "@/components/AccountabilityCard";
 
 const Map3DCanvas = dynamic(() => import("@/components/Map3DCanvas"), { ssr: false });
 
@@ -37,6 +41,10 @@ export default function WalkPage() {
   const busy = useRef(false);
   const [data, setData] = useState<BlockData | null>(null);
   const [dataErr, setDataErr] = useState("");
+  const [steps, setSteps] = useState<GlassBoxStep[]>([]);
+  const [tab, setTab] = useState<"block" | "lens" | "glass">("block");
+  const [exporting, setExporting] = useState(false);
+  const pushSteps = useCallback((s: GlassBoxStep[]) => setSteps((prev) => [...s, ...prev].slice(0, 40)), []);
 
   const announce = useCallback((b: BlockContext) => {
     setBlock(b);
@@ -48,7 +56,10 @@ export default function WalkPage() {
       .then((d) => {
         if (walker.current?.current().blockId !== b.blockId) return;
         setData(d);
-        setCaption(narrate(b, d));
+        // Person C's Walk Narrator writes the line; its fact gate checks every number.
+        const n = narrateBlock(b, d);
+        setCaption(n.text);
+        pushSteps(blockSteps(b, d, n.trace, n.ms));
       })
       .catch(() => {
         setDataErr("Couldn't reach NYC Open Data right now.");
@@ -56,7 +67,7 @@ export default function WalkPage() {
       });
     const next = walker.current?.peek("next_block");
     if (next) fetchBlockData(next).catch(() => {});
-  }, []);
+  }, [pushSteps]);
 
   const start = useCallback(
     async (origin = "", destination = "") => {
@@ -115,6 +126,9 @@ export default function WalkPage() {
       if (dir) {
         e.preventDefault();
         move(dir);
+      } else if (e.key === "g" || e.key === "G") {
+        setTab("glass");
+        setTimeout(() => document.getElementById("glass-box")?.focus(), 0);
       }
     };
     const onWalk = (e: Event) => {
@@ -133,13 +147,63 @@ export default function WalkPage() {
     e.preventDefault();
     const intent = parseWalkIntent(input);
     setInput("");
-    if (!intent) return setCaption(`Try "next block", "go back", "turn left on Myrtle", or "walk me from Stockholm to Menahan".`);
+    if (!intent) {
+      // Not a walk command → a question for Person C's grounded Q&A.
+      if (!input.trim()) return;
+      if (!block || !data) return setCaption("Start a walk first, then ask about the block you're on.");
+      const a = askAboutBlock(input, block, data);
+      setCaption(a.answer);
+      pushSteps(a.steps);
+      return;
+    }
     if ("start" in intent) {
       setFrom(intent.start.origin);
       setTo(intent.start.destination);
       start(intent.start.origin, intent.start.destination);
     }
     else move(intent.direction, intent.crossStreet);
+  };
+
+  const exportReport = async (b: BlockContext, d: BlockData) => {
+    if (!d.councilDistrict) return;
+    setExporting(true);
+    const startedAt = Date.now();
+    // Open the tab during the click so popup blockers allow it; fill it once the report is built.
+    const win = window.open("", "_blank");
+    if (win) win.document.write("<p style='font:16px system-ui;padding:24px'>Building accountability report…</p>");
+    try {
+      // Person E's report endpoint builds the council-ready page from the live numbers.
+      const res = await fetch("/api/report", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          targetArea: `${b.streetName} between ${b.fromCrossStreet} and ${b.toCrossStreet}, ${b.borough}`,
+          language: "en",
+          councilDistrict: d.councilDistrict,
+          timeWindowDays: 30,
+          complaints: d.all311,
+          crashes: [{ intersection: b.upcomingIntersection.name, result: d.crashes }],
+        }),
+      });
+      const report = await res.json();
+      if (!res.ok) throw new Error(report.error ?? "Report failed");
+      // Open the returned HTML directly; the endpoint's in-memory links don't survive serverless restarts.
+      const url = URL.createObjectURL(new Blob([report.html], { type: "text/html" }));
+      if (win && !win.closed) win.location.href = url;
+      else {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `accountability-report-${report.reportId ?? startedAt}.html`;
+        a.click();
+      }
+      pushSteps([{ id: `report-${startedAt}`, tool: "generate_accountability_report", status: "done", startedAt, durationMs: Date.now() - startedAt, recordCount: d.all311.totalComplaints, datasetId: "erm2-nwe9", filters: { area: b.streetName, "council district": d.councilDistrict } }]);
+      setCaption(`Accountability report ready for Council District ${d.councilDistrict}. ${win && !win.closed ? "It opened in a new tab." : "It was downloaded."}`);
+    } catch (err) {
+      win?.close();
+      setCaption(`I couldn't build the report: ${err instanceof Error ? err.message : "unknown error"}.`);
+    } finally {
+      setExporting(false);
+    }
   };
 
   const idx = block?.routeIndex ?? -1;
@@ -174,19 +238,25 @@ export default function WalkPage() {
 
 
       {block && (
-        <aside className="datacard" aria-label="Block data">
-          <h2>This block · last 30 days</h2>
-          {!data && !dataErr && <p className="muted">Loading NYC Open Data…</p>}
-          {dataErr && <p className="muted">{dataErr}</p>}
-          {data && (
-            <>
+        <aside className="datacard" aria-label="Block details">
+          <div className="tabs" role="tablist" aria-label="Panels">
+            {([["block", "This block"], ["lens", "Accountability"], ["glass", "Glass Box"]] as const).map(([id, label]) => (
+              <button key={id} role="tab" aria-selected={tab === id} aria-controls={`panel-${id}`} id={`tab-${id}`} onClick={() => setTab(id)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {!data && !dataErr && tab !== "glass" && <p className="muted">Loading NYC Open Data…</p>}
+          {dataErr && tab !== "glass" && <p className="muted">{dataErr}</p>}
+
+          {tab === "block" && data && (
+            <div role="tabpanel" id="panel-block" aria-labelledby="tab-block">
+              <h2>This block · last 30 days</h2>
               <div className="stats">
                 <div><b>{data.noise.totalComplaints}</b><span>noise complaints</span></div>
-                <div><b>{data.noise.openComplaints}</b><span>still open</span></div>
+                <div><b>{data.noise.openComplaints}</b><span>noise still open</span></div>
                 <div><b>{data.all311.totalComplaints}</b><span>all 311 complaints</span></div>
-                <div><b>{data.all311.closedNoActionCount}</b><span>closed, no action</span></div>
-                <div><b>{data.all311.medianResponseHours}h</b><span>median response</span></div>
-                <div><b>{data.all311.repeatLocationCount}</b><span>repeat addresses (3+)</span></div>
+                <div><b>{data.all311.openComplaints}</b><span>all still open</span></div>
               </div>
               {data.noise.topDescriptors.length > 0 && (
                 <p className="muted">Top noise: {data.noise.topDescriptors.map((t) => `${t.descriptor} (${t.count})`).join(", ")}</p>
@@ -199,11 +269,26 @@ export default function WalkPage() {
                 <div><b>{data.crashes.fatalities}</b><span>killed</span></div>
               </div>
               <p className="lag">{data.crashes.lagDisclosureNotice}</p>
+              <p className="muted small">Ask in the box below: "how many are still open?", "closed with no action?", "¿cuántos choques?" Press G for the Glass Box.</p>
+            </div>
+          )}
+
+          {tab === "lens" && data && (
+            <div role="tabpanel" id="panel-lens" aria-labelledby="tab-lens">
+              <AccountabilityCard areaLabel={`${block.streetName}, ${block.fromCrossStreet} to ${block.toCrossStreet}`} timeWindowDays={30} data={data.all311} />
               <p className="muted small">
-                Sources: <a href={data.all311.executedQuery.split(" ")[0]} target="_blank" rel="noreferrer">311 (erm2-nwe9)</a> ·{" "}
-                <a href={data.crashes.executedQuery} target="_blank" rel="noreferrer">NYPD crashes (h9gi-nx95)</a>
+                {data.councilDistrict ? `City Council District ${data.councilDistrict}.` : "Council district unknown for this block."}
               </p>
-            </>
+              <button className="primary wide" disabled={exporting || !data.councilDistrict} onClick={() => exportReport(block, data)}>
+                {exporting ? "Building report…" : "Export council report"}
+              </button>
+            </div>
+          )}
+
+          {tab === "glass" && (
+            <div role="tabpanel" id="panel-glass" aria-labelledby="tab-glass">
+              <GlassBoxPanel steps={steps} crashDataThroughDate={data?.crashes.dataThroughDate} />
+            </div>
           )}
         </aside>
       )}
@@ -216,7 +301,7 @@ export default function WalkPage() {
           <button className={block ? "primary" : ""} onClick={() => move("next_block")} aria-keyshortcuts="ArrowUp">Next block ▶</button>
           <form onSubmit={submit}>
             <label htmlFor="cmd" className="sr-only">Walk command</label>
-            <input id="cmd" value={input} onChange={(e) => setInput(e.target.value)} placeholder='"turn left", "next block"' autoComplete="off" />
+            <input id="cmd" value={input} onChange={(e) => setInput(e.target.value)} placeholder='Ask or command: "how many still open?", "turn left"' autoComplete="off" />
             <button type="submit">Go</button>
           </form>
         </div>

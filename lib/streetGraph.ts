@@ -58,7 +58,7 @@ interface Corridor {
 const KNICKERBOCKER: Corridor = {
   street: "Knickerbocker Avenue",
   borough: "Brooklyn",
-  councilDistrict: 34,
+  councilDistrict: 0, // looked up live per block (see lib/blockData.ts)
   communityBoard: "Brooklyn CB 4",
   // Ordered northwest → southeast
   corners: [
@@ -104,7 +104,7 @@ const KNICKERBOCKER: Corridor = {
 const MYRTLE: Corridor = {
   street: "Myrtle Avenue",
   borough: "Brooklyn",
-  councilDistrict: 34,
+  councilDistrict: 0,
   communityBoard: "Brooklyn CB 4",
   // Ordered west → east
   corners: [

@@ -27,6 +27,8 @@ export interface GlassBoxStep {
   datasetId?: DatasetId;
   notice?: string;
   error?: string;
+  // Optional display name for agents beyond the four tools (e.g. Person C's WalkNarratorAgent).
+  agentLabel?: string;
 }
 
 export const AGENT_LABELS: Record<GlassBoxToolName, string> = {
