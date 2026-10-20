@@ -44,6 +44,13 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   return target.getAttribute('role') === 'textbox';
 }
 
+/** True when Space should activate the focused control (button, link, checkbox, tab…) rather than push-to-talk. */
+export function isActivatableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest('button, a[href], summary, input, select, textarea, label')) return true;
+  return !!target.closest('[role="button"], [role="tab"], [role="checkbox"], [role="switch"], [role="link"], [role="menuitem"], [role="radio"]');
+}
+
 export function useAccessibleControls(cb: AccessibleControlsCallbacks) {
   const enabled = cb.enabled ?? true;
   const reducedMotion = useReducedMotion();
@@ -74,14 +81,16 @@ export function useAccessibleControls(cb: AccessibleControlsCallbacks) {
   }), opts);
 
   // Push-to-talk: start on keydown, end on keyup. preventDefault stops page scroll.
+  // Space on a focused button/checkbox/tab keeps its native meaning (activate), so it is not hijacked.
   useHotkeys('space', (e) => {
-    if (isTypingTarget(e.target)) return;
+    if (e.type === 'keydown' && (isTypingTarget(e.target) || isActivatableTarget(e.target))) return;
     if (e.type === 'keydown' && !talkingRef.current) {
       talkingRef.current = true; setTalking(true); cbRef.current.onPushToTalkStart();
     } else if (e.type === 'keyup' && talkingRef.current) {
       talkingRef.current = false; setTalking(false); cbRef.current.onPushToTalkEnd();
     }
-  }, { ...opts, keydown: true, keyup: true });
+  }, { ...opts, keydown: true, keyup: true,
+    preventDefault: (e) => talkingRef.current || !(isTypingTarget(e.target) || isActivatableTarget(e.target)) });
 
   const closeHelp = useCallback(() => setHelpOpen(false), []);
   return { reducedMotion, helpOpen, closeHelp, talking, shortcuts: SHORTCUTS };

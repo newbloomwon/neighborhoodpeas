@@ -1,3 +1,4 @@
+/// <reference types="vitest/globals" />
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';

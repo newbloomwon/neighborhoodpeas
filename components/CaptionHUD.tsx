@@ -14,6 +14,8 @@ export interface CaptionHUDProps {
   currentTimeMs?: number;
   lang: Lang;
   reducedMotion?: boolean;
+  /** Render in the page flow (e.g. inside the walk dock) instead of fixed to the bottom of the viewport. */
+  inline?: boolean;
 }
 
 const box: CSSProperties = {
@@ -23,10 +25,12 @@ const box: CSSProperties = {
   fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif', zIndex: 1000, pointerEvents: 'none',
 };
 
-export function CaptionHUD({ text, words, currentTimeMs, lang, reducedMotion }: CaptionHUDProps) {
+const inlineBox: CSSProperties = { ...box, position: 'static', left: 'auto', bottom: 'auto', transform: 'none', maxWidth: 'none', zIndex: 'auto' };
+
+export function CaptionHUD({ text, words, currentTimeMs, lang, reducedMotion, inline }: CaptionHUDProps) {
   const timed = words && words.length > 0 && typeof currentTimeMs === 'number';
   return (
-    <div data-testid="caption-hud" aria-hidden="true" lang={lang} style={box}>
+    <div data-testid="caption-hud" aria-hidden="true" lang={lang} style={inline ? inlineBox : box}>
       {timed
         ? words!.map((w, i) => {
             const active = currentTimeMs! >= w.startMs && currentTimeMs! < w.endMs;
