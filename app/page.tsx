@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import { planWalk, StreetWalker, type BlockContext, type WalkDirection } from "@/lib/streetGraph";
 import { dropToStreet, glideTo, turnOnto, prefersReducedMotion } from "@/lib/cameraChoreographer";
+import { fetchBlockData, narrate, type BlockData } from "@/lib/blockData";
 
 const Map3DCanvas = dynamic(() => import("@/components/Map3DCanvas"), { ssr: false });
 
@@ -30,11 +31,27 @@ export default function WalkPage() {
   const walker = useRef<StreetWalker | null>(null);
   const map = useRef<MapLibreMap | null>(null);
   const busy = useRef(false);
+  const [data, setData] = useState<BlockData | null>(null);
+  const [dataErr, setDataErr] = useState("");
 
   const announce = useCallback((b: BlockContext) => {
     setBlock(b);
-    setCaption(`You're on ${b.streetName}, between ${b.fromCrossStreet} and ${b.toCrossStreet}. Next corner: ${b.toCrossStreet}.`);
+    setCaption(`You're on ${b.streetName}, between ${b.fromCrossStreet} and ${b.toCrossStreet}. Checking NYC Open Data…`);
+    setData(null);
+    setDataErr("");
     window.dispatchEvent(new CustomEvent("peas:block", { detail: b }));
+    fetchBlockData(b)
+      .then((d) => {
+        if (walker.current?.current().blockId !== b.blockId) return;
+        setData(d);
+        setCaption(narrate(b, d));
+      })
+      .catch(() => {
+        setDataErr("Couldn't reach NYC Open Data right now.");
+        setCaption(`You're on ${b.streetName}, between ${b.fromCrossStreet} and ${b.toCrossStreet}. I couldn't reach NYC Open Data, so I won't guess any numbers.`);
+      });
+    const next = walker.current?.peek("next_block");
+    if (next) fetchBlockData(next).catch(() => {});
   }, []);
 
   const start = useCallback(
@@ -119,6 +136,42 @@ export default function WalkPage() {
           ))}
         </ol>
       </section>
+
+
+      {block && (
+        <aside className="datacard" aria-label="Block data">
+          <h2>This block · last 30 days</h2>
+          {!data && !dataErr && <p className="muted">Loading NYC Open Data…</p>}
+          {dataErr && <p className="muted">{dataErr}</p>}
+          {data && (
+            <>
+              <div className="stats">
+                <div><b>{data.noise.totalComplaints}</b><span>noise complaints</span></div>
+                <div><b>{data.noise.openComplaints}</b><span>still open</span></div>
+                <div><b>{data.all311.totalComplaints}</b><span>all 311 complaints</span></div>
+                <div><b>{data.all311.closedNoActionCount}</b><span>closed, no action</span></div>
+                <div><b>{data.all311.medianResponseHours}h</b><span>median response</span></div>
+                <div><b>{data.all311.repeatLocationCount}</b><span>repeat addresses (3+)</span></div>
+              </div>
+              {data.noise.topDescriptors.length > 0 && (
+                <p className="muted">Top noise: {data.noise.topDescriptors.map((t) => `${t.descriptor} (${t.count})`).join(", ")}</p>
+              )}
+              <h2>Corner ahead: {block.toCrossStreet}</h2>
+              <div className="stats">
+                <div><b>{data.crashes.totalCrashes}</b><span>crashes, last year of data</span></div>
+                <div><b>{data.crashes.pedestrianInjuries}</b><span>pedestrians injured</span></div>
+                <div><b>{data.crashes.cyclistInjuries}</b><span>cyclists injured</span></div>
+                <div><b>{data.crashes.fatalities}</b><span>killed</span></div>
+              </div>
+              <p className="lag">{data.crashes.lagDisclosureNotice}</p>
+              <p className="muted small">
+                Sources: <a href={data.all311.executedQuery.split(" ")[0]} target="_blank" rel="noreferrer">311 (erm2-nwe9)</a> ·{" "}
+                <a href={data.crashes.executedQuery} target="_blank" rel="noreferrer">NYPD crashes (h9gi-nx95)</a>
+              </p>
+            </>
+          )}
+        </aside>
+      )}
 
       <section className="dock" aria-label="Walk controls">
         <p className="caption" aria-live="polite">{caption}</p>
