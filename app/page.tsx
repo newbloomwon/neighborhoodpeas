@@ -326,6 +326,7 @@ function WalkPage() {
         <p className="kicker">{block ? (idx < 0 ? "Off route · exploring" : `Block ${Math.min(idx + 1, plan.blocks.length)} of ${plan.blocks.length}`) : "Walk Mode"}</p>
         <h1>{block?.streetName ?? "Walk any NYC block"}</h1>
         <p className="between">{block ? `${block.fromCrossStreet} → ${block.toCrossStreet}` : plan.label}</p>
+        {block && <p className="routelabel">Route: {plan.label} · {plan.blocks.length} block{plan.blocks.length === 1 ? "" : "s"}</p>}
         <ol className="progress" aria-hidden="true">
           {plan.blocks.map((b, i) => (
             <li key={b.blockId} className={i === idx ? "here" : i < idx ? "done" : ""} />

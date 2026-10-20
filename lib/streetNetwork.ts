@@ -294,9 +294,13 @@ async function nominatim(text: string): Promise<Place | null> {
 
 export async function geocode(text: string, near?: { lat: number; lon: number }): Promise<Place | null> {
   // People type "to 43rd St and 8th Ave" in the To box; drop the leading from/to (and Spanish desde/hasta/a).
-  const t = text.trim().replace(/^(?:from|to|desde|hasta|a|de)\s+(?:the\s+|la\s+|el\s+)?/i, "").trim();
+  const t = text.trim().replace(/^(?:from|to|desde|hasta|a|de)(?:\s*:\s*|\s+)(?:the\s+|la\s+|el\s+)?/i, "").trim();
   if (!t) return null;
-  const corner = t.match(/^(.+?)\s+(?:and|&|at|@|y|con|\/)\s+(.+)$/i);
+  // "43rd St and 8th Ave", or with no "and" at all: "43rd street 8th avenue".
+  const TYPE = "(?:street|st|avenue|ave|av|boulevard|blvd|road|rd|place|pl|drive|dr|parkway|pkwy|lane|ln|court|ct|terrace|ter|concourse|broadway)";
+  const corner =
+    t.match(/^(.+?)\s+(?:and|&|at|@|y|con|\/)\s+(.+)$/i) ??
+    t.match(new RegExp(`^(.*?\\b${TYPE}\\.?),?\\s+(.+\\b${TYPE}\\b.*)$`, "i"));
   // "350 5th Ave" / "35-20 Broadway" start with a house number; "42nd St and 8th Ave" is a corner.
   if (corner && !/^\d+(-\d+)?\s/.test(t)) {
     const hit = await geocodeIntersection(corner[1], corner[2], near).catch(() => null);

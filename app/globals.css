@@ -73,3 +73,4 @@ button.talking { background: #b91c1c; border-color: #fecaca; color: #fff; font-w
 .stage.hc .stats div { background: #000; border-color: #fff; }
 .stage.hc .stats span, .stage.hc .muted, .stage.hc .lag { color: #fff; }
 .stage.hc :focus-visible { outline: 4px solid #FFD700; outline-offset: 3px; }
+.routelabel { margin: -4px 0 8px; font-size: 13px; color: var(--muted); }
